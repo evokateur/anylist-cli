@@ -1,3 +1,3 @@
-# anylist-cli
+# AnyList CLI
 
-A command line interface for AnyList
+Hello, a CLI for AnyList
