@@ -19,9 +19,16 @@ import unittest
 
 import pyte
 
+BEANS_A = "2b8f6e0c1a9d4c7eb53f8a2d6e1c0b97"
+BEANS_B = "d07a5c3e9f2b4a18c6e0b7f1d3a9e542"
+CREAM_CHEESE = "a1c7e4b9d2f04e6b8c5a3f0e7d1b9c26"
+BAGELS = "58d3b0e6f9a14c2d9e7b1a4c0f8e6d3b"
+MILK = "4f1d2c9a8b7e4e3fa61c0d5b2e9f7a13"
+UP, DOWN, ESC = "\x1b[A", "\x1b[B", "\x1b"
+
 
 class InteractionTest(unittest.TestCase):
-    """Verify selection and execution stay separate and preserve item identity."""
+    """Verify Enter runs the line as shown and navigation previews aliases or IDs."""
 
     def setUp(self):
         self.screen = pyte.Screen(80, 24)
@@ -76,34 +83,9 @@ class InteractionTest(unittest.TestCase):
                 self.read_output()
         self.fail(f"Missing {text!r} on screen:\n{display}")
 
-    def test_tab_clears_menu_without_corrupting_prompt(self):
-        self.send("anylist untick beans")
-        self.expect_display("[beans-b]")
-        self.assert_prompt("anylist untick beans", [
-            "> Coffee beans  |  Whole bean  [beans-a]",
-            "  Coffee beans  |  Whole bean  [beans-b]",
-        ])
-        self.send("\t")
-        self.assert_prompt("anylist untick beans-a")
-
-    def test_no_match_title_is_single_quoted(self):
-        self.send("anylist untick absent")
-        message = "No matching item in 'queste sono le cose'"
-        self.expect_display(message)
-        self.assert_prompt("anylist untick absent", [message])
-        row = self.screen.cursor.y + 1
-        for column in range(len(message)):
-            cell = self.screen.buffer[row][column]
-            self.assertFalse(cell.underscore)
-            self.assertFalse(cell.italics)
-        self.send("\x15anylist untick beans")
-        self.expect_display("[beans-b]")
-        self.send("\t")
-        self.assert_prompt("anylist untick beans-a")
-        row = self.screen.cursor.y
-        self.assertFalse(any(cell.underscore for cell in self.screen.buffer[row].values()))
-
     def assert_prompt(self, command, rows=()):
+        # ESC waits for KEYTIMEOUT before zle treats it as a lone key.
+        time.sleep(0.5)
         self.drain()
         lines = [line.rstrip() for line in self.screen.display]
         prompt = f"TRACER> {command}"
@@ -116,165 +98,173 @@ class InteractionTest(unittest.TestCase):
         self.assertEqual((self.screen.cursor.y, self.screen.cursor.x),
                          (prompt_row, len(prompt)))
 
-    def test_editing_completed_command_reopens_menu(self):
-        self.send("anylist untick beans")
-        self.expect_display("[beans-b]")
-        self.send("\t")
-        self.assert_prompt("anylist untick beans-a")
-        self.send("\x7f")
-        self.expect_display("[beans-b]")
-        self.send("\x1b[B")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-b]")
-        self.send("\t")
-        self.assert_prompt("anylist untick beans-b")
+    def test_alias_shown_and_filtered_without_ids(self):
+        self.send("anylist untick phil")
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.send("\x15anylist untick lly")
+        self.assert_prompt("anylist untick lly", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+        ])
+
+    def test_enter_runs_typed_text_verbatim(self):
+        self.send("anylist untick phil")
+        self.expect_display("[philly]")
         self.send("\r")
-        self.expect("Resolved command: anylist untick beans-b")
-        self.assert_prompt("")
-
-    def test_tab_clears_wrapped_rows_in_narrow_terminal(self):
-        self.screen.resize(lines=24, columns=32)
-        fcntl.ioctl(self.terminal, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", 24, 32, 0, 0))
-        self.drain()
-        self.send("anylist untick beans")
-        self.expect_display("Whole bean")
-        self.send("\t")
-        self.assert_prompt("anylist untick beans-a")
-
-    def test_tab_accepts_first_without_executing(self):
-        self.send("anylist untick MIL ")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.drain()
-        self.send("\t")
-        output = self.expect_display("TRACER> anylist untick milk")
+        output = self.expect("No item with alias or ID 'phil' in queste sono le cose")
         self.assertNotIn("DEMO: Unticked:", output)
-        self.send("\n")
-        output = self.expect("Resolved command: anylist untick milk")
-        self.assertIn("DEMO: Unticked: Milk [milk]", output)
-        self.send("anylist untick milk\n")
-        self.expect("DEMO: Unticked: Milk [milk]")
 
-    def test_enter_substitutes_first_match_and_executes(self):
-        self.send("anylist untick MIL ")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.drain()
+    def test_tab_completes_subcommand_and_alias(self):
+        self.send("anylist un\t")
+        self.assert_prompt("anylist untick ")
+        self.send("ph\t")
+        self.assert_prompt("anylist untick philly", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+        ])
         self.send("\r")
-        output = self.expect("Resolved command: anylist untick milk")
-        self.assertIn("DEMO: Unticked: Milk [milk]", output)
-        self.assertIn("anylist untick milk", output)
+        self.expect(f"DEMO: Unticked: Cream cheese ({CREAM_CHEESE}) on queste sono le cose")
 
-    def test_unticked_items_remain_searchable_and_untick_is_idempotent(self):
-        self.send("anylist untick mil")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.send("\r")
-        self.expect("Resolved command: anylist untick milk")
-        self.drain()
-        self.send("anylist untick mil")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.send("\r")
-        output = self.expect("Resolved command: anylist untick milk")
-        self.assertIn("DEMO: Unticked: Milk [milk]", output)
-        self.assertNotIn("Already unticked", output)
+    def test_tab_without_alias_match_does_nothing(self):
+        self.send("anylist untick bag\t")
+        self.assert_prompt("anylist untick bag", ["  Bagels  |  For Phil's brunch"])
 
-    def test_arrows_select_second_duplicate_by_id(self):
+    def test_down_previews_alias_then_id_and_escape_restores(self):
+        self.send("anylist untick phil")
+        self.expect_display("[philly]")
+        self.send(DOWN)
+        self.assert_prompt("anylist untick philly", [
+            "> Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.send(DOWN)
+        self.assert_prompt(f"anylist untick {BAGELS}", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "> Bagels  |  For Phil's brunch",
+        ])
+        self.send(ESC)
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+
+    def test_up_out_of_list_restores_typed_text(self):
+        self.send("anylist untick phil")
+        self.expect_display("[philly]")
+        self.send(DOWN + DOWN + UP)
+        self.assert_prompt("anylist untick philly", [
+            "> Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.send(UP)
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+
+    def test_enter_runs_previewed_command_and_history_keeps_it(self):
         self.send("anylist untick bean")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-a]")
+        self.expect_display("Coffee beans")
+        self.send(DOWN + DOWN)
+        self.expect_display(f"anylist untick {BEANS_B}")
+        self.send("\r")
+        output = self.expect(f"DEMO: Unticked: Coffee beans ({BEANS_B})")
+        self.assertNotIn(BEANS_A, output)
         self.drain()
-        self.send("\x1b[B")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-b]")
-        self.send("\x1b[A")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-a]")
-        self.send("\x1b[B")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-b]")
-        self.send("\n")
-        output = self.expect("Resolved command: anylist untick beans-b")
-        self.assertIn("DEMO: Unticked: Coffee beans [beans-b]", output)
-        self.send("anylist untick bean")
-        output = self.expect_display("  Coffee beans  |  Whole bean  [beans-b]")
-        self.assertIn("> Coffee beans  |  Whole bean  [beans-a]", output)
+        self.send(UP)
+        self.assert_prompt(f"anylist untick {BEANS_B}", ["  Coffee beans  |  Whole bean"])
+        self.send("\r")
+        self.expect(f"DEMO: Unticked: Coffee beans ({BEANS_B})")
+
+    def test_preview_is_read_only_until_leaving_list(self):
+        self.send("anylist untick phil")
+        self.expect_display("[philly]")
+        self.send(DOWN + "\x7f" + "x" + "\x15" + "\x17")
+        self.assert_prompt("anylist untick philly", [
+            "> Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.send(ESC)
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.send("\x7f")
+        self.assert_prompt("anylist untick phi", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+
+    def test_typed_id_filters_and_runs(self):
+        self.send(f"anylist untick {MILK}")
+        self.expect_display("  Milk  |  Organic, whole")
+        self.send("\r")
+        self.expect(f"DEMO: Unticked: Milk ({MILK})")
+
+    def test_untick_is_idempotent(self):
+        for _ in range(2):
+            self.send("anylist untick philly\r")
+            output = self.expect(f"DEMO: Unticked: Cream cheese ({CREAM_CHEESE})")
+            self.assertNotIn("Already unticked", output)
+
+    def test_no_match_title_is_single_quoted(self):
+        self.send("anylist untick absent")
+        message = "No matching item in 'queste sono le cose'"
+        self.expect_display(message)
+        self.assert_prompt("anylist untick absent", [message])
+        row = self.screen.cursor.y + 1
+        for column in range(len(message)):
+            cell = self.screen.buffer[row][column]
+            self.assertFalse(cell.underscore)
+            self.assertFalse(cell.italics)
 
     def test_notes_filter_and_backspace(self):
         self.send("anylist untick bergamotx")
         self.expect_display("No matching item in 'queste sono le cose'")
         self.send("\x7f")
-        self.expect_display("> Earl Grey tea  |  Sam's favourite; bergamot  [tea]")
-        self.send("\n")
-        output = self.expect("Resolved command: anylist untick tea")
-        self.assertIn("DEMO: Unticked: Earl Grey tea [tea]", output)
+        self.expect_display("  Earl Grey tea  |  Sam's favourite; bergamot  [earl]")
 
-    def test_unselected_input_and_cancel_do_not_untick(self):
-        self.send("anylist untick no-such-item")
-        self.expect_display("No matching item in 'queste sono le cose'")
+    def test_menu_rows_erase_in_narrow_terminal(self):
+        self.screen.resize(lines=24, columns=32)
+        fcntl.ioctl(self.terminal, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", 24, 32, 0, 0))
         self.drain()
-        self.send("\t\n")
-        output = self.expect("No item with ID 'no-such-item' in queste sono le cose")
-        self.assertNotIn("DEMO: Unticked:", output)
-        self.send('print -r -- "EXIT:$?"\n')
-        self.expect("EXIT:1\r\n")
-        self.send("anylist untick mil")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.send("\x03")
-        self.drain()
-        self.send("anylist untick mil")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-
-    def test_filter_change_resets_focus_and_history_keeps_identity(self):
         self.send("anylist untick bean")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-a]")
-        self.drain()
-        self.send("\x1b[B")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-b]")
-        self.send("s")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-a]")
-        self.send("\r")
-        self.expect("Resolved command: anylist untick beans-a")
-        self.drain()
-        self.send("\x1b[A")
-        self.expect_display("TRACER> anylist untick beans-a")
-        self.send("\r")
-        self.expect("DEMO: Unticked: Coffee beans [beans-a]")
+        self.expect_display("Whole bean")
+        self.send("\x15")
+        self.assert_prompt("")
+
+    def test_cancel_does_not_untick(self):
+        self.send("anylist untick phil")
+        self.expect_display("[philly]")
+        self.send(DOWN + "\x03")
+        output = self.drain()
+        self.assertNotIn("DEMO: Unticked:", output)
+        self.send("anylist untick phil")
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
 
     def test_empty_filter_and_regular_shell_commands(self):
         self.send("anylist untick   ")
-        output = self.expect("anylist untick") + self.drain()
-        self.assertNotIn("Groceries (sample data)", output)
-        self.assertNotIn("[milk]", output)
-        self.assertNotIn("No matching item", output)
+        self.assert_prompt("anylist untick   ")
         self.send("\t\r")
-        output = self.drain()
-        self.assertNotIn("DEMO:", output)
-        self.assertNotIn("Groceries (sample data)", output)
-        self.assertIn("Usage: anylist untick <item_id>", output)
+        self.expect("Usage: anylist untick <alias|item_id>")
         self.send("anylist untick m")
-        self.expect_display("> Milk  |  Organic, whole  [milk]")
-        self.drain()
+        self.expect_display("  Milk  |  Organic, whole")
         self.send("\x7f")
-        output = self.drain()
-        self.assertNotIn("[milk]", output)
-        self.assertNotIn("Groceries (sample data)", output)
-        self.assertNotIn("No matching item", output)
-        self.send("\r")
-        self.expect("Usage: anylist untick <item_id>")
-        self.drain()
-        self.send("print -r -- NORMAL-SHELL\r")
+        self.assert_prompt("anylist untick ")
+        self.send("\x15print -r -- NORMAL-SHELL\r")
         self.expect("NORMAL-SHELL\r\n")
 
-    def test_typed_id_filters_candidates(self):
-        self.send("anylist untick beans-b")
-        self.expect_display("> Coffee beans  |  Whole bean  [beans-b]")
-        self.drain()
-        self.send("\r")
-        output = self.expect("Resolved command: anylist untick beans-b")
-        self.assertIn("DEMO: Unticked: Coffee beans [beans-b]", output)
-        self.assertNotIn("DEMO: Unticked: Coffee beans [beans-a]", output)
-
-    def test_command_without_selection_runs_as_written(self):
-        self.send('anylist untick beans-b; print -r -- "AFTER-COMMAND"')
+    def test_command_with_trailing_shell_code_runs_as_written(self):
+        self.send('anylist untick philly; print -r -- "AFTER-COMMAND"')
         self.expect_display("No matching item in 'queste sono le cose'")
-        self.drain()
         self.send("\r")
         output = self.expect("AFTER-COMMAND\r\n")
-        self.assertIn("Resolved command: anylist untick beans-b", output)
+        self.assertIn("DEMO: Unticked: Cream cheese", output)
 
 
 if __name__ == "__main__":
