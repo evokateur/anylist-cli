@@ -2,13 +2,18 @@ use anyhow::{Context, Result, bail};
 use anylist_rs::{AnyListClient, SavedTokens};
 use std::io::{self, Write};
 
-pub fn restore(tokens: SavedTokens) -> Result<AnyListClient> {
+pub fn validate(tokens: &SavedTokens) -> Result<()> {
     if tokens.access_token().is_empty()
         || reqwest::header::HeaderValue::from_str(tokens.access_token()).is_err()
     {
         bail!("Invalid AnyList access token");
     }
-    Ok(AnyListClient::from_tokens(tokens)?)
+    Ok(())
+}
+
+pub fn restore(tokens: SavedTokens) -> Result<AnyListClient> {
+    validate(&tokens)?;
+    Ok(AnyListClient::from_tokens(tokens)?.disable_auto_refresh())
 }
 
 pub async fn prompt() -> Result<AnyListClient> {
@@ -81,6 +86,7 @@ mod tests {
         for (refresh_status, retry_status, expected_error) in [
             ("200 OK", "503 Unavailable", "503"),
             ("200 OK", "401 Unauthorized", crate::storage::LOGIN_REQUIRED),
+            ("200 OK", "", "Invalid AnyList access token"),
             ("503 Unavailable", "", "503"),
             ("401 Unauthorized", "", crate::storage::LOGIN_REQUIRED),
         ] {
@@ -106,7 +112,11 @@ mod tests {
                 (
                     "/auth/token/refresh",
                     refresh_status,
-                    r#"{"access_token":"renewed","refresh_token":"second"}"#,
+                    if refresh_status == "200 OK" && retry_status.is_empty() {
+                        r#"{"access_token":"invalid\nfixture","refresh_token":"second"}"#
+                    } else {
+                        r#"{"access_token":"renewed","refresh_token":"second"}"#
+                    },
                 ),
                 ("/data/user-data/get", retry_status, ""),
             ] {
@@ -171,7 +181,7 @@ mod tests {
         );
         assert_eq!(
             storage.tokens().unwrap().refresh_token(),
-            if refresh_status == "200 OK" {
+            if refresh_status == "200 OK" && !retry_status.is_empty() {
                 "second"
             } else {
                 "first"
