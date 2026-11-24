@@ -48,8 +48,12 @@ fn remove(path: &std::path::Path) -> Result<()> {
 
 impl Storage {
     pub fn logout(&self) -> Result<()> {
-        remove(&self.cache)?;
-        remove(&self.credentials)
+        let credentials = remove(&self.credentials);
+        let cache = remove(&self.cache);
+        match (credentials, cache) {
+            (Err(first), Err(second)) => Err(anyhow!("{first:#}; {second:#}")),
+            (credentials, cache) => credentials.and(cache),
+        }
     }
 }
 

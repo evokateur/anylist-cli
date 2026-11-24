@@ -2,6 +2,15 @@ use anyhow::{Context, Result, bail};
 use anylist_rs::{AnyListClient, SavedTokens};
 use std::io::{self, Write};
 
+pub fn restore(tokens: SavedTokens) -> Result<AnyListClient> {
+    if tokens.access_token().is_empty()
+        || reqwest::header::HeaderValue::from_str(tokens.access_token()).is_err()
+    {
+        bail!("Invalid AnyList access token");
+    }
+    Ok(AnyListClient::from_tokens(tokens)?)
+}
+
 pub async fn prompt() -> Result<AnyListClient> {
     eprint!("Email: ");
     io::stderr().flush()?;
@@ -55,7 +64,7 @@ async fn authenticate(endpoint: &str, email: &str, password: String) -> Result<A
         login.user_id,
         login.is_premium_user,
     );
-    let mut client = AnyListClient::from_tokens(tokens)?;
+    let mut client = restore(tokens)?;
     client.set_client_identifier(identifier);
     Ok(client)
 }
@@ -69,6 +78,21 @@ mod tests {
 
     #[tokio::test]
     async fn login_exchanges_credentials_and_keeps_tokens_if_first_sync_fails() {
+        for (refresh_status, retry_status, expected_error) in [
+            ("200 OK", "503 Unavailable", "503"),
+            ("200 OK", "401 Unauthorized", crate::storage::LOGIN_REQUIRED),
+            ("503 Unavailable", "", "503"),
+            ("401 Unauthorized", "", crate::storage::LOGIN_REQUIRED),
+        ] {
+            failed_sync_fixture(refresh_status, retry_status, expected_error).await;
+        }
+    }
+
+    async fn failed_sync_fixture(
+        refresh_status: &'static str,
+        retry_status: &'static str,
+        expected_error: &str,
+    ) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
@@ -81,11 +105,14 @@ mod tests {
                 ("/data/user-data/get", "401 Unauthorized", ""),
                 (
                     "/auth/token/refresh",
-                    "200 OK",
+                    refresh_status,
                     r#"{"access_token":"renewed","refresh_token":"second"}"#,
                 ),
-                ("/data/user-data/get", "503 Unavailable", ""),
+                ("/data/user-data/get", retry_status, ""),
             ] {
+                if status.is_empty() {
+                    break;
+                }
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(&stream);
                 let mut headers = String::new();
@@ -140,9 +167,16 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("503")
+                .contains(expected_error)
         );
-        assert_eq!(storage.tokens().unwrap().refresh_token(), "second");
+        assert_eq!(
+            storage.tokens().unwrap().refresh_token(),
+            if refresh_status == "200 OK" {
+                "second"
+            } else {
+                "first"
+            }
+        );
         assert!(!storage.cache.exists());
         server.join().unwrap();
     }

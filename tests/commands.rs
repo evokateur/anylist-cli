@@ -51,3 +51,35 @@ fn login_requires_an_email_before_authentication() {
     assert_eq!(output.stderr, b"Email: Email is required\n");
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn malformed_saved_access_token_is_rejected_before_sync() {
+    let home = tempdir().unwrap();
+    let data = home.path().join("anylist-cli");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("credentials.json"), r#"{"access_token":"invalid\nsecret","refresh_token":"refresh","user_id":"u","is_premium_user":false}"#).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_anylist"))
+        .arg("sync")
+        .env("XDG_DATA_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stderr, b"Invalid AnyList access token\n");
+}
+
+#[test]
+fn logout_removes_credentials_even_if_cache_cannot_be_removed() {
+    let home = tempdir().unwrap();
+    let dir = home.path().join("anylist-cli");
+    std::fs::create_dir_all(dir.join("lists.json")).unwrap();
+    let credentials = dir.join("credentials.json");
+    std::fs::write(&credentials, "fixture").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_anylist"))
+        .arg("logout")
+        .env("XDG_CACHE_HOME", home.path())
+        .env("XDG_DATA_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!credentials.exists());
+}

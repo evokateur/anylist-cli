@@ -34,7 +34,7 @@ async fn run(command: Command) -> Result<()> {
             storage.begin_session(&client.export_tokens()?)?;
             client
         }
-        Command::Sync => anylist_rs::AnyListClient::from_tokens(storage.tokens()?)?,
+        Command::Sync => login::restore(storage.tokens()?)?,
     };
     let current = session::sync(&client, &storage).await?;
     println!("Default list: {current}");

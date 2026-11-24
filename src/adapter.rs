@@ -70,14 +70,35 @@ impl TryFrom<PbUserDataResponse> for Snapshot {
     }
 }
 
+// anylist_rs 0.5.1 embeds the refresh HTTP status and raw response body in
+// its error string. Surface only the status; bodies may contain account data.
+fn fetch_error(error: anylist_rs::AnyListError) -> anyhow::Error {
+    use anylist_rs::AnyListError;
+    match error {
+        AnyListError::AuthenticationFailed(message) => {
+            let status = message
+                .strip_prefix("Token refresh failed with status: ")
+                .and_then(|rest| rest.split_once(", body: "))
+                .and_then(|(status, _)| status.split_whitespace().next())
+                .and_then(|code| code.parse::<u16>().ok());
+            match status {
+                Some(400 | 401 | 403) => anyhow::anyhow!(crate::storage::LOGIN_REQUIRED),
+                Some(code) => anyhow::anyhow!("AnyList token refresh failed (HTTP {code})"),
+                None => anyhow::anyhow!("AnyList token refresh failed"),
+            }
+        }
+        AnyListError::NetworkError(message)
+            if message.starts_with("Request failed after token refresh with status: 401 ") =>
+        {
+            anyhow::anyhow!(crate::storage::LOGIN_REQUIRED)
+        }
+        other => other.into(),
+    }
+}
+
 impl crate::session::Session for anylist_rs::AnyListClient {
     async fn fetch(&self) -> Result<Snapshot> {
-        let data = self.get_user_data().await.map_err(|error| match error {
-            anylist_rs::AnyListError::AuthenticationFailed(_) => {
-                anyhow::anyhow!(crate::storage::LOGIN_REQUIRED)
-            }
-            other => anyhow::Error::new(other),
-        })?;
+        let data = self.get_user_data().await.map_err(fetch_error)?;
         Snapshot::try_from(data)
     }
 
