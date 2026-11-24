@@ -83,6 +83,7 @@ dependencies = [
  "anyhow",
  "anylist_rs",
  "clap",
+ "prost",
  "reqwest",
  "rpassword",
  "serde",

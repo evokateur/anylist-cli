@@ -123,8 +123,7 @@ mod tests {
             "fixture-password".into(),
         )
         .await
-        .unwrap()
-        .with_base_url(base);
+        .unwrap();
         let home = tempfile::tempdir().unwrap();
         let storage = Storage {
             credentials: home.path().join("credentials.json"),
@@ -136,11 +135,14 @@ mod tests {
             .unwrap();
         assert_eq!(storage.tokens().unwrap().access_token(), "initial");
         assert!(
-            crate::session::sync(&client, &storage)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("503")
+            crate::session::sync(
+                &crate::adapter::RemoteSession::new(client, &base).unwrap(),
+                &storage
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("503")
         );
         assert_eq!(storage.tokens().unwrap().refresh_token(), "second");
         assert!(!storage.cache.exists());
