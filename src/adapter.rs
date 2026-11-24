@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use anylist_rs::{AnyListClient, SavedTokens, protobuf::anylist::PbShoppingListsResponse};
-use prost::Message;
+use anylist_rs::protobuf::anylist::PbUserDataResponse;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -24,37 +23,23 @@ pub(crate) struct Item {
     ticked: bool,
 }
 
-// anylist_rs 0.5.1 drops settings field 43 during decoding. Project only the
-// two sections needed for a snapshot, reusing upstream shopping-list types.
-#[derive(Message)]
-struct UserData {
-    #[prost(message, optional, tag = "1")]
-    shopping_lists_response: Option<PbShoppingListsResponse>,
-    #[prost(message, optional, tag = "11")]
-    mobile_app_settings_response: Option<Selection>,
-}
-
-#[derive(Message)]
-struct Selection {
-    #[prost(string, optional, tag = "43")]
-    selected_list_id: Option<String>,
-}
-
 impl Snapshot {
     pub fn current_list(&self) -> Result<&List> {
         self.lists
             .iter()
             .find(|list| list.id == self.current_list_id)
-            .context("AnyList current list ID matches no shopping list")
+            .context("AnyList default list ID matches no shopping list")
     }
+}
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        let data = UserData::decode(bytes)?;
+impl TryFrom<PbUserDataResponse> for Snapshot {
+    type Error = anyhow::Error;
+    fn try_from(data: PbUserDataResponse) -> Result<Self> {
         let current_list_id = data
             .mobile_app_settings_response
-            .and_then(|settings| settings.selected_list_id)
+            .and_then(|settings| settings.default_list_id)
             .filter(|id| !id.is_empty())
-            .context("AnyList did not supply a current list")?;
+            .context("AnyList did not supply a default list")?;
         let mut lists = Vec::new();
         for source in data
             .shopping_lists_response
@@ -85,67 +70,19 @@ impl Snapshot {
     }
 }
 
-pub struct RemoteSession {
-    client: AnyListClient,
-    http: reqwest::Client,
-    user_data_url: String,
-}
-
-impl RemoteSession {
-    pub fn new(client: AnyListClient, base_url: &str) -> Result<Self> {
-        Ok(Self {
-            client: client.with_base_url(base_url),
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
-            user_data_url: format!("{base_url}/data/user-data/get"),
-        })
-    }
-
-    async fn request_data(&self) -> Result<reqwest::Response> {
-        Ok(self
-            .http
-            .post(&self.user_data_url)
-            .bearer_auth(self.client.export_tokens()?.access_token())
-            .header("X-AnyLeaf-API-Version", "3")
-            .header(
-                "X-AnyLeaf-Client-Identifier",
-                self.client.client_identifier(),
-            )
-            .multipart(
-                reqwest::multipart::Form::new()
-                    .part("operations", reqwest::multipart::Part::bytes(Vec::new())),
-            )
-            .send()
-            .await?)
-    }
-}
-
-impl crate::session::Session for RemoteSession {
+impl crate::session::Session for anylist_rs::AnyListClient {
     async fn fetch(&self) -> Result<Snapshot> {
-        let mut response = self.request_data().await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            self.client
-                .refresh_tokens()
-                .await
-                .map_err(|error| match error {
-                    anylist_rs::AnyListError::AuthenticationFailed(_) => {
-                        anyhow::anyhow!(crate::storage::LOGIN_REQUIRED)
-                    }
-                    other => anyhow::Error::new(other),
-                })?;
-            response = self.request_data().await?;
-        }
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            anyhow::bail!(crate::storage::LOGIN_REQUIRED);
-        }
-        if !response.status().is_success() {
-            anyhow::bail!("Cannot fetch AnyList data ({})", response.status());
-        }
-        Snapshot::decode(&response.bytes().await?)
+        let data = self.get_user_data().await.map_err(|error| match error {
+            anylist_rs::AnyListError::AuthenticationFailed(_) => {
+                anyhow::anyhow!(crate::storage::LOGIN_REQUIRED)
+            }
+            other => anyhow::Error::new(other),
+        })?;
+        Snapshot::try_from(data)
     }
-    fn tokens(&self) -> Result<SavedTokens> {
-        Ok(self.client.export_tokens()?)
+
+    fn tokens(&self) -> Result<anylist_rs::SavedTokens> {
+        Ok(self.export_tokens()?)
     }
 }
 
@@ -153,12 +90,12 @@ impl crate::session::Session for RemoteSession {
 mod tests {
     use super::*;
     use anylist_rs::protobuf::anylist::{
-        PbListItem, PbMobileAppSettings, PbShoppingList, PbUserDataResponse,
+        PbListItem, PbMobileAppSettings, PbShoppingList, PbShoppingListsResponse,
     };
     use serde_json::json;
 
     #[test]
-    fn snapshot_uses_selected_list_and_preserves_all_lists_and_item_details() {
+    fn snapshot_uses_account_default_and_preserves_all_lists_and_item_details() {
         let data = PbUserDataResponse {
             mobile_app_settings_response: Some(PbMobileAppSettings {
                 default_list_id: Some("a".into()),
@@ -188,13 +125,15 @@ mod tests {
             }),
             ..Default::default()
         };
+        use prost::Message;
         let mut wire = data.encode_to_vec();
-        // A second settings fragment merges into field 11. String field 43 selects list b.
+        // Desktop selects list b while the account default remains list a.
         wire.extend_from_slice(&[0x5a, 4, 0xda, 2, 1, b'b']);
+        let data = PbUserDataResponse::decode(wire.as_slice()).unwrap();
         assert_eq!(
-            serde_json::to_value(Snapshot::decode(&wire).unwrap()).unwrap(),
+            serde_json::to_value(Snapshot::try_from(data).unwrap()).unwrap(),
             json!({
-                "current_list_id":"b", "lists":[{"id":"a","name":"First","items":[]},{"id":"b","name":"Second","items":[{"id":"c","name":"Tea","notes":"Green","ticked":true}]}]
+                "current_list_id":"a", "lists":[{"id":"a","name":"First","items":[]},{"id":"b","name":"Second","items":[{"id":"c","name":"Tea","notes":"Green","ticked":true}]}]
             })
         );
     }
@@ -202,20 +141,22 @@ mod tests {
     #[test]
     fn missing_or_unmatched_selection_reports_the_problem() {
         for (id, message) in [
-            (None, "AnyList did not supply a current list"),
+            (None, "AnyList did not supply a default list"),
             (
                 Some("absent"),
-                "AnyList current list ID matches no shopping list",
+                "AnyList default list ID matches no shopping list",
             ),
         ] {
-            let data = UserData {
-                mobile_app_settings_response: Some(Selection {
-                    selected_list_id: id.map(String::from),
+            let data = PbUserDataResponse {
+                mobile_app_settings_response: Some(PbMobileAppSettings {
+                    default_list_id: id.map(String::from),
+                    ..Default::default()
                 }),
                 shopping_lists_response: Some(Default::default()),
+                ..Default::default()
             };
             assert_eq!(
-                Snapshot::decode(&data.encode_to_vec())
+                Snapshot::try_from(data)
                     .err()
                     .expect("must reject unresolved list")
                     .to_string(),

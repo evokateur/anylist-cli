@@ -36,9 +36,8 @@ async fn run(command: Command) -> Result<()> {
         }
         Command::Sync => anylist_rs::AnyListClient::from_tokens(storage.tokens()?)?,
     };
-    let remote = adapter::RemoteSession::new(client, "https://www.anylist.com")?;
-    let current = session::sync(&remote, &storage).await?;
-    println!("Current list: {current}");
+    let current = session::sync(&client, &storage).await?;
+    println!("Default list: {current}");
     Ok(())
 }
 
