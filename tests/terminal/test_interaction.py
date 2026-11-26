@@ -211,7 +211,7 @@ class InteractionTest(TerminalCase):
     def test_preview_is_read_only_until_leaving_list(self):
         self.send("anylist untick phil")
         self.expect_display("[philly]")
-        self.send(DOWN + "\x7f" + "x" + "\x15" + "\x17")
+        self.send(DOWN + "x" + "\x15" + "\x17")
         self.assert_prompt("anylist untick philly", [
             "> Cream cheese (Philadelphia)  [philly]",
             "  Bagels (For Phil's brunch)",
@@ -223,6 +223,23 @@ class InteractionTest(TerminalCase):
         ])
         self.send("\x7f")
         self.assert_prompt("anylist untick phi", [
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
+        ])
+
+    def test_backspace_restores_the_typed_filter_and_deletes_one_character(self):
+        self.send("anylist untick phil" + DOWN + DOWN)
+        self.assert_prompt(f"anylist untick {BAGELS}", [
+            "  Cream cheese (Philadelphia)  [philly]",
+            "> Bagels (For Phil's brunch)",
+        ])
+        self.send("\x7f")
+        self.assert_prompt("anylist untick phi", [
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
+        ])
+        self.send(DOWN + "\x08")
+        self.assert_prompt("anylist untick ph", [
             "  Cream cheese (Philadelphia)  [philly]",
             "  Bagels (For Phil's brunch)",
         ])
@@ -339,12 +356,14 @@ class DelegationTest(TerminalCase):
         "for key in '^I' '^M' '^J' '^[[A' '^[[B' '^[OA' '^[OB' '^['; "
         'do bindkey "$key" append_key; done; '
         "report_key() { BUFFER+=x; CURSOR=$#BUFFER; }; zle -N report_key; "
-        "for key in '^I' '^M' '^J' '^['; do bindkey \"$key\" report_key; done"
+        "for key in '^I' '^M' '^J' '^[' '^?' '^H'; do bindkey \"$key\" report_key; done"
     )
 
     def test_keys_call_the_widgets_bound_before_installation(self):
         self.send("other\t\r\n" + UP + DOWN + "\x1bOA\x1bOB" + ESC)
         self.assert_prompt("otherxxxABABx")
+        self.send("\x7f\x08")
+        self.assert_prompt("otherxxxABABxxx")
 
 
 class ViModeTest(TerminalCase):

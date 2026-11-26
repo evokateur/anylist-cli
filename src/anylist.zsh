@@ -144,6 +144,15 @@ _anylist_escape() {
   fi
 }
 
+_anylist_backspace() {
+  if [[ $KEYMAP != vicmd ]] && (( _anylist_focus )); then
+    _anylist_restore
+    zle .backward-delete-char
+  else
+    _anylist_delegate "$@"
+  fi
+}
+
 _anylist_enter() {
   if [[ $KEYMAP == vicmd ]] || { (( ! _anylist_focus )) && [[ $BUFFER != anylist && $BUFFER != 'anylist '* ]]; }; then
     _anylist_delegate "$@"
@@ -224,3 +233,5 @@ _anylist_bind '^[OA' _anylist_up 5
 _anylist_bind '^[OB' _anylist_down 6
 _anylist_bind '^[' _anylist_escape 7
 _anylist_bind '^I' _anylist_tab 8
+_anylist_bind '^?' _anylist_backspace 9
+_anylist_bind '^H' _anylist_backspace 10

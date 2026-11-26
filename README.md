@@ -31,5 +31,6 @@ current keymap and delegates to existing widget bindings outside AnyList
 commands. `bindkey -s` string macros on those keys are unsupported.
 
 Type `anylist untick ` followed by part of an item’s name, notes, alias, or ID.
-Use Down and Up to preview a match, Esc to restore the filter, and Enter to run
-the displayed command. Tab completes subcommands and alias prefixes.
+Use Down and Up to preview a match. Esc restores the filter, and Backspace
+restores it and deletes its last character. Enter runs the displayed command.
+Tab completes subcommands and alias prefixes.
