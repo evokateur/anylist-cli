@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use anylist_rs::protobuf::anylist::PbUserDataResponse;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub struct Snapshot {
@@ -13,13 +12,13 @@ pub struct Snapshot {
 pub struct List {
     pub id: String,
     pub name: String,
-    pub items: Vec<Item>,
+    pub(crate) items: Vec<Item>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Item {
-    pub id: String,
-    pub name: String,
+pub(crate) struct Item {
+    pub(crate) id: String,
+    pub(crate) name: String,
     notes: String,
     ticked: bool,
 }
@@ -34,14 +33,15 @@ impl Snapshot {
 }
 
 impl List {
-    /// The item named by `argument`: an alias whose item is on this list, or an item ID on it.
-    pub fn item(&self, argument: &str, aliases: &HashMap<String, String>) -> Option<&Item> {
-        let id = aliases.get(argument).map_or(argument, String::as_str);
+    pub fn item(&self, id: &str) -> Option<&Item> {
         self.items.iter().find(|item| item.id == id)
     }
 
-    pub fn unknown_item(&self, argument: &str) -> anyhow::Error {
-        anyhow::anyhow!("No item with alias or ID '{argument}' in '{}'", self.name)
+    pub fn unknown_item(&self, alias_or_id: &str) -> anyhow::Error {
+        anyhow::anyhow!(
+            "No item with alias or ID '{alias_or_id}' in '{}'",
+            self.name
+        )
     }
 }
 

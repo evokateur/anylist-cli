@@ -25,26 +25,29 @@ pub async fn sync(session: &impl Session, storage: &Storage) -> Result<String> {
     Ok(snapshot.current_list()?.name.clone())
 }
 
-/// Untick the item named by `argument` on the cached current list.
-pub async fn untick(session: &impl Session, storage: &Storage, argument: &str) -> Result<String> {
+/// Untick the item named by `alias_or_id` on the cached current list.
+pub async fn untick(
+    session: &impl Session,
+    storage: &Storage,
+    alias_or_id: &str,
+) -> Result<String> {
     let cached = storage.snapshot()?;
     let aliases = storage.aliases()?;
+    let item_id = aliases.get(alias_or_id).map_or(alias_or_id, String::as_str);
     let list = cached.current_list()?;
     let item = list
-        .item(argument, &aliases)
-        .ok_or_else(|| list.unknown_item(argument))?;
-    let fetched = async {
+        .item(item_id)
+        .ok_or_else(|| list.unknown_item(alias_or_id))?;
+    let outcome = async {
         session.untick(&list.id, &item.id).await?;
         session.fetch().await
     }
     .await;
-    let fetched = persist(session, storage, fetched)?;
+    let fetched = persist(session, storage, outcome)?;
     let list = fetched.current_list()?;
     let unticked = list
-        .items
-        .iter()
-        .find(|candidate| candidate.id == item.id)
-        .ok_or_else(|| list.unknown_item(argument))?;
+        .item(&item.id)
+        .ok_or_else(|| list.unknown_item(alias_or_id))?;
     Ok(format!("Unticked: {} on '{}'", unticked.name, list.name))
 }
 

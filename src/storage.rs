@@ -52,8 +52,7 @@ impl Storage {
             #[serde(default)]
             aliases: HashMap<String, String>,
         }
-        let config: Config =
-            toml::from_str(&text).map_err(|error| anyhow!("Config error: {error}"))?;
+        let config: Config = toml::from_str(&text).context("Config error")?;
         Ok(config.aliases)
     }
 }
