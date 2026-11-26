@@ -12,7 +12,7 @@ _anylist_reset_candidates() {
 }
 
 _anylist_get_candidates() {
-  local query=$1 result row item_id alias name
+  local query=$1 result row item_id alias name notes
   local tab=$'\t'
   _anylist_reset_candidates
   _anylist_query=$query
@@ -28,8 +28,8 @@ _anylist_get_candidates() {
     alias=${row%%$tab*}
     row=${row#*$tab}
     name=${row%%$tab*}
-    row=${row#*$tab}
-    _anylist_labels+=("$name  |  $row${alias:+  [$alias]}")
+    notes=${row#*$tab}
+    _anylist_labels+=("$name${notes:+ ($notes)}${alias:+  [$alias]}")
     _anylist_choices+=("${alias:-$item_id}")
     [[ -n $alias ]] && _anylist_aliases+=("$alias")
   done

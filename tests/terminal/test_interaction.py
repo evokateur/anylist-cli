@@ -154,12 +154,12 @@ class InteractionTest(TerminalCase):
     def test_alias_shown_and_filtered_without_ids(self):
         self.send("anylist untick phil")
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send("\x15anylist untick lly")
         self.assert_prompt("anylist untick lly", [
-            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Cream cheese (Philadelphia)  [philly]",
         ])
 
 
@@ -168,18 +168,18 @@ class InteractionTest(TerminalCase):
         self.expect_display("[philly]")
         self.send(DOWN)
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send(DOWN)
         self.assert_prompt(f"anylist untick {BAGELS}", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "> Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "> Bagels (For Phil's brunch)",
         ])
         self.send(ESC)
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
 
     def test_up_out_of_list_restores_typed_text(self):
@@ -187,13 +187,13 @@ class InteractionTest(TerminalCase):
         self.expect_display("[philly]")
         self.send(DOWN + DOWN + UP)
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send(UP)
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
 
     def test_enter_runs_previewed_command_and_history_keeps_it(self):
@@ -213,18 +213,18 @@ class InteractionTest(TerminalCase):
         self.expect_display("[philly]")
         self.send(DOWN + "\x7f" + "x" + "\x15" + "\x17")
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send(ESC)
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send("\x7f")
         self.assert_prompt("anylist untick phi", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
 
     def test_enter_runs_typed_text_verbatim(self):
@@ -240,17 +240,17 @@ class InteractionTest(TerminalCase):
             self.assert_prompt(f"anylist {command}")
         self.send("ph\t")
         self.assert_prompt("anylist untick philly", [
-            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Cream cheese (Philadelphia)  [philly]",
         ])
         self.send("\x15anylist untick mix\t")
         self.assert_prompt("anylist untick mixed-", [
-            "  Apple  |    [mixed-apple]",
-            "  Pear  |    [mixed-pear]",
+            "  Apple  [mixed-apple]",
+            "  Pear  [mixed-pear]",
         ])
 
     def test_tab_does_not_complete_ids_or_internal_commands(self):
         self.send("anylist untick bag\t")
-        self.assert_prompt("anylist untick bag", ["  Bagels  |  For Phil's brunch"])
+        self.assert_prompt("anylist untick bag", ["  Bagels (For Phil's brunch)"])
         for prefix in ["in", "cand"]:
             self.send(f"\x15anylist {prefix}\t")
             self.assert_prompt(f"anylist {prefix}")
@@ -261,7 +261,7 @@ class InteractionTest(TerminalCase):
         self.assert_prompt("anylist untick ")
         self.send("\t")
         self.assert_prompt("anylist untick philly", [
-            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Cream cheese (Philadelphia)  [philly]",
         ])
 
     def test_down_cannot_select_an_item_when_tab_leaves_the_menu_closed(self):
@@ -272,12 +272,12 @@ class InteractionTest(TerminalCase):
         self.config.write_text(f'[aliases]\n-philly = "{CREAM_CHEESE}"\n')
         self.send("anylist untick -ph\t")
         self.assert_prompt("anylist untick -- -philly", [
-            "  Cream cheese  |  Philadelphia  [-philly]",
+            "  Cream cheese (Philadelphia)  [-philly]",
         ])
         self.send("\x15anylist untick phil" + DOWN)
         self.assert_prompt("anylist untick -- -philly", [
-            "> Cream cheese  |  Philadelphia  [-philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [-philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.credentials.unlink()
         self.send("\r")
@@ -290,25 +290,25 @@ class InteractionTest(TerminalCase):
         self.cache.write_text(json.dumps(snapshot))
         self.send("anylist untick cream" + DOWN + DOWN)
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
+            "> Cream cheese (Philadelphia)  [philly]",
         ])
 
     def test_navigation_keeps_the_last_results_until_the_query_changes(self):
         self.send("anylist untick phil")
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.credentials.unlink()
         self.send(" " + DOWN)
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send(ESC)
         self.assert_prompt("anylist untick phil ", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send("x")
         self.assert_prompt("anylist untick phil x")
@@ -355,8 +355,8 @@ class ViModeTest(TerminalCase):
         self.expect_display("> Cream cheese")
         self.send(ESC)
         self.assert_prompt("anylist untick phil", [
-            "  Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "  Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
         self.send(ESC)
         time.sleep(0.15)
@@ -372,8 +372,8 @@ class KshArraysTest(TerminalCase):
     def test_preview_targets_the_highlighted_row_with_ksh_arrays_enabled(self):
         self.send("anylist untick phil" + DOWN)
         self.assert_prompt("anylist untick philly", [
-            "> Cream cheese  |  Philadelphia  [philly]",
-            "  Bagels  |  For Phil's brunch",
+            "> Cream cheese (Philadelphia)  [philly]",
+            "  Bagels (For Phil's brunch)",
         ])
 
 
