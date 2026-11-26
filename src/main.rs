@@ -23,6 +23,8 @@ enum Command {
     Sync,
     /// Remove saved credentials and cached lists.
     Logout,
+    /// Untick an item on the default list, by alias or item ID.
+    Untick { item: String },
 }
 
 async fn run(command: Command) -> Result<()> {
@@ -35,6 +37,11 @@ async fn run(command: Command) -> Result<()> {
             client
         }
         Command::Sync => login::restore(storage.tokens()?)?,
+        Command::Untick { item } => {
+            let client = login::restore(storage.tokens()?)?;
+            println!("{}", session::untick(&client, &storage, &item).await?);
+            return Ok(());
+        }
     };
     let current = session::sync(&client, &storage).await?;
     println!("Default list: {current}");

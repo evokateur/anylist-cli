@@ -166,6 +166,7 @@ mod tests {
         let storage = Storage {
             credentials: home.path().join("credentials.json"),
             cache: home.path().join("lists.json"),
+            config: home.path().join("config.toml"),
         };
         std::fs::write(&storage.cache, "old account").unwrap();
         storage
