@@ -1,24 +1,25 @@
 use anyhow::{Context, Result};
 use anylist_rs::protobuf::anylist::PbUserDataResponse;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Snapshot {
     pub current_list_id: String,
     pub lists: Vec<List>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct List {
     pub id: String,
     pub name: String,
-    pub(crate) items: Vec<Item>,
+    pub items: Vec<Item>,
 }
 
-#[derive(Serialize)]
-pub(crate) struct Item {
-    id: String,
-    name: String,
+#[derive(Serialize, Deserialize)]
+pub struct Item {
+    pub id: String,
+    pub name: String,
     notes: String,
     ticked: bool,
 }
@@ -29,6 +30,18 @@ impl Snapshot {
             .iter()
             .find(|list| list.id == self.current_list_id)
             .context("AnyList default list ID matches no shopping list")
+    }
+}
+
+impl List {
+    /// The item named by `argument`: an alias whose item is on this list, or an item ID on it.
+    pub fn item(&self, argument: &str, aliases: &HashMap<String, String>) -> Option<&Item> {
+        let id = aliases.get(argument).map_or(argument, String::as_str);
+        self.items.iter().find(|item| item.id == id)
+    }
+
+    pub fn unknown_item(&self, argument: &str) -> anyhow::Error {
+        anyhow::anyhow!("No item with alias or ID '{argument}' in '{}'", self.name)
     }
 }
 
@@ -91,22 +104,33 @@ fn refresh_error(error: anylist_rs::AnyListError) -> anyhow::Error {
     }
 }
 
+/// Make an authenticated call; on authentication failure, refresh and validate
+/// the tokens, then retry once. A second authentication failure means not logged in.
+async fn authenticated<T, Call: Future<Output = anylist_rs::Result<T>>>(
+    client: &anylist_rs::AnyListClient,
+    call: impl Fn() -> Call,
+) -> Result<T> {
+    use anylist_rs::AnyListError::AuthenticationFailed;
+    match call().await {
+        Err(AuthenticationFailed(_)) => {
+            client.refresh_tokens().await.map_err(refresh_error)?;
+            crate::session::Session::tokens(client)?;
+            call().await.map_err(|error| match error {
+                AuthenticationFailed(_) => anyhow::anyhow!(crate::storage::LOGIN_REQUIRED),
+                other => other.into(),
+            })
+        }
+        result => Ok(result?),
+    }
+}
+
 impl crate::session::Session for anylist_rs::AnyListClient {
     async fn fetch(&self) -> Result<Snapshot> {
-        let data = match self.get_user_data().await {
-            Err(anylist_rs::AnyListError::AuthenticationFailed(_)) => {
-                self.refresh_tokens().await.map_err(refresh_error)?;
-                self.tokens()?;
-                self.get_user_data().await.map_err(|error| match error {
-                    anylist_rs::AnyListError::AuthenticationFailed(_) => {
-                        anyhow::anyhow!(crate::storage::LOGIN_REQUIRED)
-                    }
-                    other => other.into(),
-                })?
-            }
-            result => result?,
-        };
-        Snapshot::try_from(data)
+        Snapshot::try_from(authenticated(self, || self.get_user_data()).await?)
+    }
+
+    async fn untick(&self, list_id: &str, item_id: &str) -> Result<()> {
+        authenticated(self, || self.uncheck_item(list_id, item_id)).await
     }
 
     fn tokens(&self) -> Result<anylist_rs::SavedTokens> {
@@ -166,6 +190,100 @@ mod tests {
                 "current_list_id":"a", "lists":[{"id":"a","name":"First","items":[]},{"id":"b","name":"Second","items":[{"id":"c","name":"Tea","notes":"Green","ticked":true}]}]
             })
         );
+    }
+
+    /// Serves `exchanges` in order as (expected path, status, body), returning each request body.
+    fn serve(
+        exchanges: Vec<(&'static str, &'static str, &'static str)>,
+    ) -> (String, std::thread::JoinHandle<Vec<Vec<u8>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for (path, status, response) in exchanges {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&stream);
+                let mut headers = String::new();
+                while !headers.ends_with("\r\n\r\n") {
+                    assert_ne!(reader.read_line(&mut headers).unwrap(), 0);
+                }
+                assert!(headers.starts_with(&format!("POST {path} ")), "{headers}");
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(|value| value.parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                bodies.push(body);
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+            }
+            bodies
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn untick_refreshes_and_retries_once_after_authentication_failure() {
+        use crate::session::Session;
+        const UPDATE: &str = "/data/shopping-lists/update";
+        const REFRESH: &str = "/auth/token/refresh";
+        const RENEWED: &str = r#"{"access_token":"renewed","refresh_token":"second"}"#;
+        for (exchanges, expected) in [
+            (
+                vec![
+                    (UPDATE, "401 Unauthorized", ""),
+                    (REFRESH, "200 OK", RENEWED),
+                    (UPDATE, "200 OK", ""),
+                ],
+                Ok("renewed"),
+            ),
+            (
+                vec![
+                    (UPDATE, "401 Unauthorized", ""),
+                    (REFRESH, "200 OK", RENEWED),
+                    (UPDATE, "401 Unauthorized", ""),
+                ],
+                Err(crate::storage::LOGIN_REQUIRED),
+            ),
+            (
+                vec![
+                    (UPDATE, "401 Unauthorized", ""),
+                    (REFRESH, "401 Unauthorized", "private"),
+                ],
+                Err(crate::storage::LOGIN_REQUIRED),
+            ),
+        ] {
+            let (base, server) = serve(exchanges);
+            let client = crate::login::restore(anylist_rs::SavedTokens::new(
+                "initial", "first", "user", false,
+            ))
+            .unwrap()
+            .with_base_url(base);
+            let result = client
+                .untick("market", "a1c7e4b9d2f04e6b8c5a3f0e7d1b9c26")
+                .await;
+            let bodies = server.join().unwrap();
+            match expected {
+                Ok(access_token) => {
+                    result.unwrap();
+                    assert_eq!(client.tokens().unwrap().access_token(), access_token);
+                }
+                Err(message) => assert_eq!(result.unwrap_err().to_string(), message),
+            }
+            let operation = String::from_utf8_lossy(&bodies[0]);
+            for value in [
+                "set-list-item-checked",
+                "market",
+                "a1c7e4b9d2f04e6b8c5a3f0e7d1b9c26",
+            ] {
+                assert!(operation.contains(value), "{value}");
+            }
+        }
     }
 
     #[test]

@@ -1,12 +1,13 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use anylist_rs::SavedTokens;
-use std::{env, fs, io, path::PathBuf};
+use std::{collections::HashMap, env, fs, io, path::PathBuf};
 
 pub const LOGIN_REQUIRED: &str = "Not logged in. Run: anylist login";
 
 pub struct Storage {
     pub credentials: PathBuf,
     pub cache: PathBuf,
+    pub config: PathBuf,
 }
 
 fn directory(variable: &str, fallback: &str) -> Result<PathBuf> {
@@ -25,6 +26,7 @@ impl Storage {
         Ok(Self {
             credentials: directory("XDG_DATA_HOME", ".local/share")?.join("credentials.json"),
             cache: directory("XDG_CACHE_HOME", ".cache")?.join("lists.json"),
+            config: directory("XDG_CONFIG_HOME", ".config")?.join("config.toml"),
         })
     }
 
@@ -36,6 +38,23 @@ impl Storage {
             result => result.context("Cannot open credentials")?,
         };
         serde_json::from_reader(file).context("Cannot read credentials")
+    }
+
+    /// Aliases from `[aliases]` in the config file, mapping alias to item ID.
+    /// A missing config file means no aliases.
+    pub fn aliases(&self) -> Result<HashMap<String, String>> {
+        let text = match fs::read_to_string(&self.config) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            result => result.context("Cannot read config")?,
+        };
+        #[derive(serde::Deserialize)]
+        struct Config {
+            #[serde(default)]
+            aliases: HashMap<String, String>,
+        }
+        let config: Config =
+            toml::from_str(&text).map_err(|error| anyhow!("Config error: {error}"))?;
+        Ok(config.aliases)
     }
 }
 
@@ -74,6 +93,16 @@ impl Storage {
 
     pub fn save_tokens(&self, tokens: &SavedTokens) -> Result<()> {
         write_json(&self.credentials, tokens).context("Cannot save credentials")
+    }
+
+    pub fn snapshot(&self) -> Result<crate::adapter::Snapshot> {
+        let file = match fs::File::open(&self.cache) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                bail!("No cached lists. Run: anylist sync");
+            }
+            result => result.context("Cannot open cached lists")?,
+        };
+        serde_json::from_reader(file).context("Cannot read cached lists")
     }
 
     pub fn save_snapshot(&self, snapshot: &crate::adapter::Snapshot) -> Result<()> {
