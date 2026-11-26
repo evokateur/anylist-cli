@@ -19,7 +19,7 @@ pub struct List {
 pub(crate) struct Item {
     pub(crate) id: String,
     pub(crate) name: String,
-    notes: String,
+    pub(crate) notes: String,
     ticked: bool,
 }
 
