@@ -170,6 +170,19 @@ fn candidates_are_silent_without_login_or_cache_and_hidden_from_help() {
 }
 
 #[test]
+fn candidates_report_an_invalid_alias_configuration() {
+    let home = session_home(Some(CACHE), Some("[aliases]\nphilly = 1\n"));
+    let output = command(home.path(), &["candidates", "cream"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .starts_with("Config error: ")
+    );
+}
+
+#[test]
 fn untick_reports_malformed_config_or_non_string_alias() {
     for config in ["[aliases\n", "[aliases]\nphilly = 1\n"] {
         let home = session_home(Some(CACHE), Some(config));

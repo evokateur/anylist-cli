@@ -43,6 +43,7 @@ class TerminalCase(unittest.TestCase):
         root = Path(fixture.name)
         self.credentials = root / "data/anylist-cli/credentials.json"
         self.config = root / "config/anylist-cli/config.toml"
+        self.cache = root / "cache/anylist-cli/lists.json"
         for directory in ("data", "cache", "config"):
             (root / directory / "anylist-cli").mkdir(parents=True)
         self.credentials.write_text(json.dumps({
@@ -58,7 +59,7 @@ class TerminalCase(unittest.TestCase):
             ("a", "Apple", ""),
             ("b", "Pear", ""),
         ]
-        (root / "cache/anylist-cli/lists.json").write_text(json.dumps({
+        self.cache.write_text(json.dumps({
             "current_list_id": "market",
             "lists": [{
                 "id": "market", "name": "queste sono le cose",
@@ -133,19 +134,20 @@ class TerminalCase(unittest.TestCase):
         self.fail(f"Missing {text!r} on screen:\n{display}")
 
     def assert_prompt(self, command, rows=()):
-        # Give zsh's KEYTIMEOUT a chance to distinguish Esc from an arrow key.
-        time.sleep(0.15)
-        self.drain()
-        lines = [line.rstrip() for line in self.screen.display]
         prompt = f"TEST> {command}"
-        self.assertIn(prompt.rstrip(), lines, "\n".join(lines))
-        prompt_row = max(index for index, line in enumerate(lines) if line == prompt.rstrip())
-        visible = lines[prompt_row:]
-        while visible and not visible[-1]:
-            visible.pop()
-        self.assertEqual(visible, [prompt.rstrip(), *rows])
-        self.assertEqual((self.screen.cursor.y, self.screen.cursor.x),
-                         (prompt_row, len(prompt)))
+        expected = [prompt.rstrip(), *rows]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            self.drain()
+            lines = [line.rstrip() for line in self.screen.display]
+            while lines and not lines[-1]:
+                lines.pop()
+            prompt_row = len(lines) - len(expected)
+            cursor = (self.screen.cursor.y, self.screen.cursor.x)
+            if lines[prompt_row:] == expected and cursor == (prompt_row, len(prompt)):
+                return
+        self.fail(f"Expected {expected!r} with cursor at end of prompt. "
+                  f"Screen at timeout with cursor at {cursor}:\n" + "\n".join(lines))
 
 
 class InteractionTest(TerminalCase):
@@ -262,9 +264,41 @@ class InteractionTest(TerminalCase):
             "  Cream cheese  |  Philadelphia  [philly]",
         ])
 
+    def test_down_cannot_select_an_item_when_tab_leaves_the_menu_closed(self):
+        self.send("anylist untick \t" + DOWN)
+        self.assert_prompt("anylist untick ")
+
+    def test_hyphen_alias_completion_and_preview_produce_a_valid_argument(self):
+        self.config.write_text(f'[aliases]\n-philly = "{CREAM_CHEESE}"\n')
+        self.send("anylist untick -ph\t")
+        self.assert_prompt("anylist untick -- -philly", [
+            "  Cream cheese  |  Philadelphia  [-philly]",
+        ])
+        self.send("\x15anylist untick phil" + DOWN)
+        self.assert_prompt("anylist untick -- -philly", [
+            "> Cream cheese  |  Philadelphia  [-philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
+        self.credentials.unlink()
+        self.send("\r")
+        self.expect("Not logged in. Run: anylist login")
+
+    def test_bare_id_in_notes_cannot_become_a_selectable_row(self):
+        snapshot = json.loads(self.cache.read_text())
+        items = snapshot["lists"][0]["items"]
+        next(item for item in items if item["id"] == CREAM_CHEESE)["notes"] += f"\n{MILK}"
+        self.cache.write_text(json.dumps(snapshot))
+        self.send("anylist untick cream" + DOWN + DOWN)
+        self.assert_prompt("anylist untick philly", [
+            "> Cream cheese  |  Philadelphia  [philly]",
+        ])
+
     def test_navigation_keeps_the_last_results_until_the_query_changes(self):
         self.send("anylist untick phil")
-        self.expect_display("[philly]")
+        self.assert_prompt("anylist untick phil", [
+            "  Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
         self.credentials.unlink()
         self.send(" " + DOWN)
         self.assert_prompt("anylist untick philly", [
@@ -330,6 +364,17 @@ class ViModeTest(TerminalCase):
         self.drain()
         self.assertEqual(self.screen.cursor.x, len("TEST> "))
         self.assertNotIn("[philly]", "\n".join(self.screen.display))
+
+
+class KshArraysTest(TerminalCase):
+    shell_setup = "bindkey -e; setopt ksharrays"
+
+    def test_preview_targets_the_highlighted_row_with_ksh_arrays_enabled(self):
+        self.send("anylist untick phil" + DOWN)
+        self.assert_prompt("anylist untick philly", [
+            "> Cream cheese  |  Philadelphia  [philly]",
+            "  Bagels  |  For Phil's brunch",
+        ])
 
 
 if __name__ == "__main__":

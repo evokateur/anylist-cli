@@ -7,7 +7,7 @@ mod storage;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::process::ExitCode;
-use storage::Storage;
+use storage::{MissingState, Storage};
 
 #[derive(Parser)]
 #[command(about = "Work with your AnyList shopping lists")]
@@ -64,10 +64,14 @@ fn main() -> ExitCode {
     let command = Cli::parse().command;
     let result = match command {
         Command::Candidates { query } => {
-            return match candidates::write(&query, std::io::stdout().lock()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(_) => ExitCode::FAILURE,
-            };
+            let result = candidates::write(&query, std::io::stdout().lock());
+            if result
+                .as_ref()
+                .is_err_and(|error| error.is::<MissingState>())
+            {
+                return ExitCode::FAILURE;
+            }
+            result
         }
         Command::Init { shell: Shell::Zsh } => {
             let cli = Cli::command();

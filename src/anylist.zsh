@@ -22,6 +22,7 @@ _anylist_get_candidates() {
   _anylist_list_name=$lines[1]
   _anylist_show_menu=1
   for row in "${(@)lines[2,-1]}"; do
+    [[ $row == *$tab*$tab*$tab* ]] || continue
     item_id=${row%%$tab*}
     row=${row#*$tab}
     alias=${row%%$tab*}
@@ -57,6 +58,7 @@ _anylist_redraw() {
   elif [[ $BUFFER == 'anylist untick '* ]]; then
     _anylist_typed=$BUFFER
     query=${_anylist_typed#anylist untick }
+    query=${query#'-- '}
   fi
   (( _anylist_focus )) && query=$_anylist_query
   query=${query##[[:space:]]#}
@@ -89,8 +91,11 @@ _anylist_line_init() {
 }
 
 _anylist_preview_choice() {
+  emulate -L zsh
   local choice=${_anylist_choices[_anylist_focus]}
-  BUFFER="anylist untick ${(q)choice}"
+  local stem='anylist untick '
+  [[ $choice == -* ]] && stem+='-- '
+  BUFFER="$stem${(q)choice}"
   CURSOR=$#BUFFER
   _anylist_preview=$BUFFER
 }
@@ -108,9 +113,13 @@ _anylist_delegate() {
 }
 
 _anylist_down() {
-  [[ $KEYMAP == vicmd || $BUFFER != 'anylist untick '* ]] && { _anylist_delegate "$@"; return; }
+  if [[ $KEYMAP == vicmd ]] || { (( ! _anylist_focus )) && [[ $BUFFER != 'anylist untick '* ]]; }; then
+    _anylist_delegate "$@"
+    return
+  fi
+  emulate -L zsh
   _anylist_redraw
-  if (( _anylist_focus < $#_anylist_choices )); then
+  if [[ -n $_anylist_query ]] && (( _anylist_focus < $#_anylist_choices )); then
     (( ++_anylist_focus ))
     _anylist_preview_choice
   fi
@@ -136,9 +145,10 @@ _anylist_escape() {
 }
 
 _anylist_enter() {
-  if [[ $KEYMAP == vicmd || $BUFFER != anylist && $BUFFER != 'anylist '* ]]; then
+  if [[ $KEYMAP == vicmd ]] || { (( ! _anylist_focus )) && [[ $BUFFER != anylist && $BUFFER != 'anylist '* ]]; }; then
     _anylist_delegate "$@"
   else
+    (( _anylist_focus )) && _anylist_redraw
     _anylist_clear_display
     _anylist_focus=0
     zle .accept-line
@@ -146,27 +156,30 @@ _anylist_enter() {
 }
 
 _anylist_tab() {
-  emulate -L zsh
+  if [[ $KEYMAP != vicmd ]] && (( _anylist_focus )); then
+    zle beep
+    return 0
+  fi
   if [[ $KEYMAP == vicmd || $BUFFER != 'anylist '* ]]; then
     _anylist_delegate "$@"
     return
   fi
-  if (( _anylist_focus )); then
-    zle beep
-    return 0
-  fi
+  emulate -L zsh
+  setopt extendedglob
 
   local stem='anylist ' prefix candidate completion
   local -a choices=("${_anylist_commands[@]}") matches=()
   if [[ $BUFFER == 'anylist untick '* ]]; then
     stem='anylist untick '
     _anylist_redraw
-    if [[ $BUFFER == "$stem" ]] && (( ! _anylist_query_requested )); then
+    [[ $BUFFER == 'anylist untick -- '* ]] && stem+='-- '
+    if [[ $BUFFER == "$stem" && -z $_anylist_query ]] && (( ! _anylist_query_requested )); then
       _anylist_get_candidates ''
     fi
     choices=("${_anylist_aliases[@]}")
   fi
   prefix=${BUFFER#"$stem"}
+  [[ $stem == 'anylist untick '* ]] && prefix=${prefix##[[:space:]]#}
   for candidate in "${choices[@]}"; do
     [[ $candidate == "$prefix"* ]] && matches+=("$candidate")
   done
@@ -179,8 +192,9 @@ _anylist_tab() {
   done
   if [[ $stem == 'anylist ' ]] && (( $#matches == 1 )); then
     completion+=' '
-  elif [[ $stem == 'anylist untick ' ]] && (( $#matches == 1 )); then
-    completion=${(q)completion}
+  elif [[ $stem == 'anylist untick '* ]]; then
+    [[ $stem == 'anylist untick ' && $completion == -* ]] && stem+='-- '
+    (( $#matches == 1 )) && completion=${(q)completion}
   fi
   BUFFER="$stem$completion"
   CURSOR=$#BUFFER
