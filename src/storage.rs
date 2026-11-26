@@ -1,8 +1,25 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use anylist_rs::SavedTokens;
-use std::{collections::HashMap, env, fs, io, path::PathBuf};
+use std::{collections::HashMap, env, fmt, fs, io, path::PathBuf};
 
 pub const LOGIN_REQUIRED: &str = "Not logged in. Run: anylist login";
+
+#[derive(Debug)]
+pub enum MissingState {
+    Login,
+    Cache,
+}
+
+impl fmt::Display for MissingState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Login => LOGIN_REQUIRED,
+            Self::Cache => "No cached lists. Run: anylist sync",
+        })
+    }
+}
+
+impl std::error::Error for MissingState {}
 
 pub struct Storage {
     pub credentials: PathBuf,
@@ -33,7 +50,7 @@ impl Storage {
     pub fn tokens(&self) -> Result<SavedTokens> {
         let file = match fs::File::open(&self.credentials) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(anyhow!(LOGIN_REQUIRED));
+                return Err(MissingState::Login.into());
             }
             result => result.context("Cannot open credentials")?,
         };
@@ -97,7 +114,7 @@ impl Storage {
     pub fn snapshot(&self) -> Result<crate::adapter::Snapshot> {
         let file = match fs::File::open(&self.cache) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                bail!("No cached lists. Run: anylist sync");
+                return Err(MissingState::Cache.into());
             }
             result => result.context("Cannot open cached lists")?,
         };

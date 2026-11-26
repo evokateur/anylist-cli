@@ -91,7 +91,7 @@ const CACHE: &str = r#"{"current_list_id":"market","lists":[
 {"id":"0b8e2f3c4d5a6b7c8d9e0f1a2b3c4d5e","name":"Nails","notes":"","ticked":true}]}]}"#;
 
 /// Isolated XDG directories holding a logged-in session, the given cache and config.
-fn untick_home(cache: Option<&str>, config: Option<&str>) -> tempfile::TempDir {
+fn session_home(cache: Option<&str>, config: Option<&str>) -> tempfile::TempDir {
     let home = tempdir().unwrap();
     let write = |relative: &str, contents: &str| {
         let path = home.path().join(relative);
@@ -111,9 +111,9 @@ fn untick_home(cache: Option<&str>, config: Option<&str>) -> tempfile::TempDir {
     home
 }
 
-fn untick(home: &std::path::Path, argument: &str) -> std::process::Output {
+fn command(home: &std::path::Path, arguments: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_anylist"))
-        .args(["untick", argument])
+        .args(arguments)
         .env("XDG_DATA_HOME", home.join("data"))
         .env("XDG_CACHE_HOME", home.join("cache"))
         .env("XDG_CONFIG_HOME", home.join("config"))
@@ -121,10 +121,71 @@ fn untick(home: &std::path::Path, argument: &str) -> std::process::Output {
         .unwrap()
 }
 
+fn untick(home: &std::path::Path, argument: &str) -> std::process::Output {
+    command(home, &["untick", argument])
+}
+
+#[test]
+fn candidates_filter_only_the_default_list_by_name_notes_alias_or_id() {
+    let cache = r#"{"current_list_id":"market","lists":[
+{"id":"market","name":"Market","items":[
+{"id":"id-one","name":"Cream cheese","notes":"  Philadelphia  ","ticked":true},
+{"id":"id-two","name":"Bagels","notes":"For Phil's brunch","ticked":false}]},
+{"id":"other","name":"Other","items":[
+{"id":"id-three","name":"Philly roll","notes":"","ticked":false}]}]}"#;
+    let home = session_home(Some(cache), Some("[aliases]\nphilly = \"id-one\""));
+    let cheese = "id-one\tphilly\tCream cheese\t  Philadelphia  \n";
+    let bagels = "id-two\t\tBagels\tFor Phil's brunch\n";
+    for (query, rows) in [
+        ("  PHIL ", format!("{cheese}{bagels}")),
+        ("lly", cheese.to_owned()),
+        ("AGEL", bagels.to_owned()),
+        ("ID-TWO", bagels.to_owned()),
+        ("absent", String::new()),
+    ] {
+        let output = command(home.path(), &["candidates", query]);
+        assert!(output.status.success(), "{query:?}: {:?}", output.stderr);
+        assert_eq!(output.stdout, format!("Market\n{rows}").as_bytes());
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn candidates_are_silent_without_login_or_cache_and_hidden_from_help() {
+    let home = session_home(None, None);
+    let logged_out = session_home(Some(CACHE), None);
+    std::fs::remove_file(logged_out.path().join("data/anylist-cli/credentials.json")).unwrap();
+    for fixture in [home.path(), logged_out.path()] {
+        let output = command(fixture, &["candidates", "cream"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    }
+    let help = command(home.path(), &["--help"]);
+    assert!(help.status.success());
+    assert!(
+        !String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("candidates")
+    );
+}
+
+#[test]
+fn candidates_report_an_invalid_alias_configuration() {
+    let home = session_home(Some(CACHE), Some("[aliases]\nphilly = 1\n"));
+    let output = command(home.path(), &["candidates", "cream"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .starts_with("Config error: ")
+    );
+}
+
 #[test]
 fn untick_reports_malformed_config_or_non_string_alias() {
     for config in ["[aliases\n", "[aliases]\nphilly = 1\n"] {
-        let home = untick_home(Some(CACHE), Some(config));
+        let home = session_home(Some(CACHE), Some(config));
         let output = untick(home.path(), "philly");
         assert_eq!(output.status.code(), Some(1), "{config:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
@@ -135,7 +196,7 @@ fn untick_reports_malformed_config_or_non_string_alias() {
 
 #[test]
 fn untick_requires_cached_lists() {
-    let home = untick_home(None, None);
+    let home = session_home(None, None);
     let output = untick(home.path(), "philly");
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stderr, b"No cached lists. Run: anylist sync\n");
@@ -154,7 +215,7 @@ fn untick_checks_login_before_cache() {
 fn untick_rejects_arguments_not_on_the_cached_current_list() {
     let config = "[aliases]\nphilly = \"a1c7e4b9d2f04e6b8c5a3f0e7d1b9c26\"\nnails = \"0b8e2f3c4d5a6b7c8d9e0f1a2b3c4d5e\"\n";
     for argument in ["phil", "nails", "0b8e2f3c4d5a6b7c8d9e0f1a2b3c4d5e"] {
-        let home = untick_home(Some(CACHE), Some(config));
+        let home = session_home(Some(CACHE), Some(config));
         let output = untick(home.path(), argument);
         assert_eq!(output.status.code(), Some(1), "{argument}");
         assert_eq!(
